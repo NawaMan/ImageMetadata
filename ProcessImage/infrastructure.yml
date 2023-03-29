@@ -1,0 +1,195 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Process image by extracting metadata including labels and texts.
+
+Parameters:
+  ImageBucketName:
+    Description: The name of the image bucket.
+    Type:        String
+  ImageTopicName:
+    Description: The name of the SNS topic.
+    Type:        String
+  ImageTopicArn:
+    Description: The ARN of the SNS topic.
+    Type:        String
+  ImageQueueName:
+    Description: The name of the SQS queue.
+    Type:        String
+    Default:     nawaman-image-queue
+  ImageDeadLetterQueueName:
+    Description: The name of the SQS dead-letter queue.
+    Type:        String
+    Default:     nawaman-image-dlq-queue
+  ImageLambdaName:
+    Description: The name of the lambda.
+    Type:        String
+    Default:     nawaman-image-function
+  ImageLambdaBucket:
+    Description: The name of bucket where the lambda is.
+    Type:        String
+    Default:     nawaman-lambdas
+  ImageLambdaKey:
+    Description: The name of S3 key of the lambda.
+    Type:        String
+  ImageLambdaRoleName:
+    Description: The name of the role for the lambda.
+    Type:        String
+    Default:     nawaman-image-function-role
+  ImageLambdaPolicyName:
+    Description: The name of the policy for the lambda.
+    Type:        String
+    Default:     nawaman-image-function-policy
+  ImageLambdaLayerName:
+    Description: The name of layer for the lambda.
+    Type:        String
+    Default:     nawaman-image-function-layer
+  ImageLambdaLayerBucket:
+    Description: The name of bucket where the layer for the lambda is.
+    Type:        String
+    Default:     nawaman-lambda-layers
+  ImageLambdaLayerKey:
+    Description: The name of S3 key of the layer.
+    Type:        String
+    Default:     layer-pillow.zip
+  ImageLambdaMemorySize:
+    Description: The size of the memory needed for the lambda.
+    Type:        Number
+    Default:     512
+    AllowedValues:
+      - 128
+      - 512
+      - 1024
+  ImageLambdaTimeout:
+    Description: The timeout needed for the lambda.
+    Type:        Number
+    Default:     180
+    AllowedValues:
+      - 30
+      - 60
+      - 120
+      - 180
+      - 300
+  VerboseMode:
+    Description: The mode for the verbose ness.
+    Type:        String
+    Default:     quiet
+    AllowedValues:
+      - verbose
+      - quiet
+
+Resources:
+  ImageCreatedQueue:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      QueueName:         ImageQueueName
+      VisibilityTimeout: !Ref ImageLambdaTimeout
+      Tags:
+        - Key: application-name
+          Value: process-image
+  
+  ImageCreatedTopicSubscription:
+    Type: 'AWS::SNS::Subscription'
+    Properties:
+      Protocol:           sqs
+      TopicArn:           !Ref ImageTopicArn
+      Endpoint:           !GetAtt ImageCreatedQueue.Arn
+      RawMessageDelivery: 'true'
+
+  ImageCreatedQueuePolicy:
+    Type: 'AWS::SQS::QueuePolicy'
+    Properties:
+      Queues:
+        - !Ref ImageCreatedQueue
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect:    'Allow'
+            Principal: '*'
+            Action:    'sqs:SendMessage'
+            Resource:  !GetAtt ImageCreatedQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref ImageTopicArn
+
+  ImageLambdaLayer:
+    Type: 'AWS::Lambda::LayerVersion'
+    Properties:
+      LayerName: !Ref ImageLambdaLayerName
+      Content:
+        S3Bucket: !Ref ImageLambdaLayerBucket
+        S3Key:    !Ref ImageLambdaLayerKey
+      CompatibleRuntimes:
+        - python3.9
+
+  ImageLambdaFunction:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      FunctionName: !Ref ImageLambdaName
+      Runtime:      python3.9
+      Handler:      lambda.handler
+      MemorySize:   !Ref ImageLambdaMemorySize
+      Timeout:      !Ref ImageLambdaTimeout
+      Role:         !GetAtt ImageLambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref ImageLambdaBucket
+        S3Key:    !Ref ImageLambdaKey
+      Layers:
+        - !Ref ImageLambdaLayer
+      Environment:
+        Variables:
+          BUCKET_NAME:  !Ref ImageBucketName
+          VERBOSE_MODE: !Ref VerboseMode
+      Tags:
+        - Key: application-name
+          Value: process-image
+
+  ImageLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Ref ImageLambdaRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: !Ref ImageLambdaPolicyName
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect:   Allow
+            Resource: arn:aws:logs:*:*:*
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+          - Effect:   Allow
+            Resource: !Sub arn:aws:s3:::${ImageBucketName}/*
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+          - Effect:   Allow
+            Resource: !GetAtt ImageCreatedQueue.Arn
+            Action:
+              - sqs:GetQueueUrl
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:ChangeMessageVisibility
+              - sqs:GetQueueAttributes
+          - Effect:   Allow
+            Resource: "*"
+            Action:
+              - rekognition:DetectLabels
+              - rekognition:DetectText
+      Tags:
+        - Key: application-name
+          Value: process-image
+
+  ImageLambdaSQSEventSourceMapping:
+    Type: 'AWS::Lambda::EventSourceMapping'
+    Properties:
+      EventSourceArn: !GetAtt ImageCreatedQueue.Arn
+      FunctionName:   !Ref ImageLambdaFunction
+      BatchSize: 1
+      Enabled: true
