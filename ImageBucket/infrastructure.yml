@@ -1,0 +1,51 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create an S3 bucket, an SNS topic, and configure the bucket to send a message to the topic when a new object is uploaded.
+
+Parameters:
+  ImageBucketName:
+    Description: The name of the image bucket.
+    Type:        String
+  ImageTopicName:
+    Description: The name of the SNS topic.
+    Type:        String
+
+Resources:
+  ImageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref ImageBucketName
+      NotificationConfiguration:
+        TopicConfigurations:
+          - Topic: !Ref ImageTopic
+            Event: s3:ObjectCreated:*
+
+  ImageTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Ref ImageTopicName
+      TopicName:   !Ref ImageTopicName
+
+  ImageTopicPolicy:
+    Type: "AWS::SNS::TopicPolicy"
+    Properties:
+      Topics: [!Ref ImageTopic]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "s3.amazonaws.com"
+            Action: "sns:Publish"
+            Resource: "*"
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub "arn:aws:s3:::${ImageBucketName}"
+
+Outputs:
+  ImageBucket:
+    Description: The name of the S3 bucket.
+    Value: !Ref ImageBucket
+  ImageTopic:
+    Description: The ARN of the SNS topic.
+    Value: !Ref ImageTopic
