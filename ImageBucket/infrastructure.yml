@@ -46,6 +46,9 @@ Outputs:
   ImageBucket:
     Description: The name of the S3 bucket.
     Value: !Ref ImageBucket
-  ImageTopic:
+  ImageTopicName:
+    Description: The Name of the SNS topic.
+    Value: !Ref ImageTopicName
+  ImageTopicArn:
     Description: The ARN of the SNS topic.
     Value: !Ref ImageTopic
